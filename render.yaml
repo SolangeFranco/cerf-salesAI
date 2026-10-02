@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: vanta-staging-api
+    runtime: docker
+    plan: free
+    region: virginia
+    branch: main
+    dockerfilePath: ./apps/api/src/Vanta.Api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: ASPNETCORE_URLS
+        value: http://0.0.0.0:8080
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Staging
+      - key: Database__ApplyMigrationsOnStartup
+        value: "true"
+      - key: ConnectionStrings__Default
+        sync: false
+      - key: Jwt__Issuer
+        value: vanta-staging-api
+      - key: Jwt__Audience
+        value: vanta-staging-web
+      - key: Jwt__SigningKey
+        generateValue: true
+      - key: Jwt__ExpirationMinutes
+        value: "60"
+      - key: Payment__Provider
+        value: manual-transfer
+      - key: OrderReservations__ExpirationMinutes
+        value: "30"
+      - key: WhatsApp__Provider
+        value: mock
+      - key: WhatsApp__MockWebhookSecret
+        generateValue: true
+      - key: Features__EnableMockEndpoints
+        value: "true"
+      - key: Ai__Provider
+        value: mock
+      - key: Embeddings__Provider
+        value: mock
+      - key: Commerce__BaseUrl
+        sync: false
+      - key: Cors__AllowedOrigins__0
+        sync: false
+    buildFilter:
+      paths:
+        - apps/api/src/Vanta.Api/**

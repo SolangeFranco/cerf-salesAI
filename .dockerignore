@@ -1,0 +1,38 @@
+# Build artifacts, VCS metadata, and local-only files never need to be sent to the
+# Docker daemon as build context. Keeping this lean also keeps secrets and local
+# dev artifacts out of image layers by construction.
+
+# VCS / editor
+.git/
+.github/
+.vscode/
+.idea/
+
+# .NET build output (must be produced fresh inside the image, never copied in)
+**/bin/
+**/obj/
+**/out/
+*.user
+
+# Node / Next.js
+**/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/test-results/
+
+# Test artifacts
+tests/**/bin/
+tests/**/obj/
+tests/**/test-results/
+
+# Local-only configuration and secrets — never bake these into an image
+.env
+.env.*
+!.env.example
+**/appsettings.Development.json
+**/appsettings.*.local.json
+
+# Docs / misc (not needed at build time)
+docs/
+*.md
+infrastructure/

@@ -1,0 +1,111 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: vanta-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vanta
+      POSTGRES_PASSWORD: vanta_dev_only
+      POSTGRES_DB: vanta
+    ports:
+      - "5432:5432"
+    volumes:
+      - vanta_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vanta -d vanta"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: vanta-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/src/Vanta.Api/Dockerfile
+    container_name: vanta-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=vanta;Username=vanta;Password=vanta_dev_only"
+      Jwt__Issuer: vanta-api
+      Jwt__Audience: vanta-clients
+      # Dev-only placeholder, never used outside this compose file. Override via
+      # a local .env (see infrastructure/.env.example) instead of editing this file.
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-dev-only-signing-key-change-me-before-any-real-deployment-32chars}
+      Jwt__ExpirationMinutes: "60"
+      WhatsApp__Provider: ${WHATSAPP_PROVIDER:-mock}
+      WhatsApp__MockWebhookSecret: ${WHATSAPP_MOCK_WEBHOOK_SECRET:-mock-dev}
+      WhatsApp__AccessToken: ${WHATSAPP_ACCESS_TOKEN:-}
+      WhatsApp__WebhookVerifyToken: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN:-}
+      WhatsApp__AppSecret: ${WHATSAPP_APP_SECRET:-}
+      WhatsApp__LinkedDeviceBridgeUrl: http://whatsapp-bridge:5080
+      WhatsApp__LinkedDeviceBridgeKey: ${WHATSAPP_BRIDGE_KEY:-dev-bridge-key-change-me}
+      WhatsApp__LinkedDeviceWebhookSecret: ${WHATSAPP_LINKED_WEBHOOK_SECRET:-dev-linked-webhook-change-me}
+      WhatsApp__LinkedDeviceWebhookUrl: http://host.docker.internal:5052/api/webhooks/whatsapp/linked-device
+      Ai__Provider: ${AI_PROVIDER:-mock}
+      Ai__ApiKey: ${AI_API_KEY:-}
+      Cors__AllowedOrigins__0: http://localhost:3000
+    ports:
+      - "5052:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  whatsapp-bridge:
+    build:
+      context: ../apps/whatsapp-bridge
+      dockerfile: Dockerfile
+    container_name: vanta-whatsapp-bridge
+    restart: unless-stopped
+    environment:
+      PORT: 5080
+      BRIDGE_KEY: ${WHATSAPP_BRIDGE_KEY:-dev-bridge-key-change-me}
+      LINKED_WEBHOOK_SECRET: ${WHATSAPP_LINKED_WEBHOOK_SECRET:-dev-linked-webhook-change-me}
+      LINKED_WEBHOOK_URL: http://host.docker.internal:5052/api/webhooks/whatsapp/linked-device
+      SESSIONS_DIR: /data/sessions
+    volumes:
+      - vanta_whatsapp_sessions:/data/sessions
+    ports:
+      - "5080:5080"
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    container_name: vanta-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8080
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/login || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  vanta_postgres_data:
+  vanta_whatsapp_sessions:

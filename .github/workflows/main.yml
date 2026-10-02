@@ -1,0 +1,150 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-release
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  NEXT_TELEMETRY_DISABLED: "1"
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/romveron/salesagentai/vanta-api
+  WEB_IMAGE: ghcr.io/romveron/salesagentai/vanta-web
+  BRIDGE_IMAGE: ghcr.io/romveron/salesagentai/vanta-whatsapp-bridge
+
+jobs:
+  build:
+    name: Validate and publish images
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vanta
+          POSTGRES_PASSWORD: vanta_dev_only
+          POSTGRES_DB: vanta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vanta -d vanta"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api_tag: ${{ steps.tags.outputs.api_tag }}
+      web_tag: ${{ steps.tags.outputs.web_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same build validation as the PR pipeline, run again on main before
+      # anything is pushed to the registry.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+        working-directory: apps/web
+      - run: npm run lint
+        working-directory: apps/web
+      - run: npm run typecheck
+        working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet restore apps/api/src/Vanta.Api/Vanta.Api.csproj
+      - run: dotnet build apps/api/src/Vanta.Api/Vanta.Api.csproj --configuration Release --no-restore
+
+      - name: Restore test project
+        run: dotnet restore tests/unit/Vanta.Api.UnitTests.csproj
+      - name: Apply integration-test migrations
+        run: |
+          dotnet tool install --global dotnet-ef --version 10.0.*
+          dotnet ef database update \
+            --project apps/api/src/Vanta.Api/Vanta.Api.csproj \
+            --startup-project apps/api/src/Vanta.Api/Vanta.Api.csproj
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ConnectionStrings__Default: "Host=localhost;Port=5432;Database=vanta;Username=vanta;Password=vanta_dev_only"
+      - name: Run API tests before publishing images
+        run: dotnet test tests/unit/Vanta.Api.UnitTests.csproj --configuration Release --no-restore
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ConnectionStrings__Default: "Host=localhost;Port=5432;Database=vanta;Username=vanta;Password=vanta_dev_only"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - id: tags
+        run: |
+          echo "api_tag=${{ env.API_IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "web_tag=${{ env.WEB_IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "bridge_tag=${{ env.BRIDGE_IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push api image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/src/Vanta.Api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:staging
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ github.sha }}
+            ${{ env.WEB_IMAGE }}:staging
+
+      - name: Build and push WhatsApp bridge image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/whatsapp-bridge
+          file: apps/whatsapp-bridge/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.BRIDGE_IMAGE }}:${{ github.sha }}
+            ${{ env.BRIDGE_IMAGE }}:staging
+
+      - name: Confirm published images match validated SHA
+        run: |
+          test -n "${GITHUB_SHA}"
+          test "${{ steps.tags.outputs.api_tag }}" = "${API_IMAGE}:${GITHUB_SHA}"
+          test "${{ steps.tags.outputs.web_tag }}" = "${WEB_IMAGE}:${GITHUB_SHA}"
+          test "${{ steps.tags.outputs.bridge_tag }}" = "${BRIDGE_IMAGE}:${GITHUB_SHA}"
+          {
+            echo "### Release gate"
+            echo "- validated commit: \`${GITHUB_SHA}\`"
+            echo "- published API image: \`${API_IMAGE}:${GITHUB_SHA}\`"
+            echo "- published web image: \`${WEB_IMAGE}:${GITHUB_SHA}\`"
+            echo "- published bridge image: \`${BRIDGE_IMAGE}:${GITHUB_SHA}\`"
+            echo "- automatic deployment: none"
+          } >> "$GITHUB_STEP_SUMMARY"

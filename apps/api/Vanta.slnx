@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Vanta.Api/Vanta.Api.csproj" />
+  </Folder>
+  <Project Path="../../tests/unit/Vanta.Api.UnitTests.csproj" />
+</Solution>
